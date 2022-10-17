@@ -67,7 +67,8 @@ def train(model, train_loader, eval_loader, num_epochs, output, eval_each_epoch)
             results["step"] = total_step
             results["train_loss"] = total_loss
             results["train_score"] = train_score
-            all_results.append(results)
+            data_r=list(results)
+            all_results.append(data_r)
 
             with open(join(output, "results.json"), "w") as f:
                 json.dump(all_results, f, indent=2)
@@ -95,8 +96,9 @@ def evaluate(model, dataloader):
     all_logits = []
     all_bias = []
     for v, q, a, b in tqdm(dataloader, ncols=100, total=len(dataloader), desc="eval"):
-        v = Variable(v, volatile=True).cuda()
-        q = Variable(q, volatile=True).cuda()
+        with torch.no_grad():
+            v = Variable(v).cuda()
+            q = Variable(q).cuda()
         pred, _ = model(v, None, q, None, None)
         all_logits.append(pred.data.cpu().numpy())
 

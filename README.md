@@ -12,7 +12,7 @@ on [VQA-CP v2.0](https://www.cc.gatech.edu/~aagrawal307/vqa-cp/), and supports t
 
 Make sure you are on a machine with a NVIDIA GPU and Python 2 with about 100 GB disk space.
 
-1. Install [PyTorch v0.3](http://pytorch.org/) with CUDA and Python 2.7.
+1. Install [PyTorch v0.4.1](http://pytorch.org/) with CUDA 9.2,cudnn 7.6.5 and Python 2.7.
 2. Install h5py, pillow, and tqdm           
 
 ### Data Setup

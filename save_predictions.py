@@ -51,8 +51,9 @@ def main():
 
     predictions = []
     for v, q, a, b in tqdm(eval_loader, ncols=100, total=len(eval_loader), desc="eval"):
-        v = Variable(v, volatile=True).cuda()
-        q = Variable(q, volatile=True).cuda()
+        with torch.no_grad():
+            v = Variable(v).cuda()
+            q = Variable(q).cuda()
         factor = model(v, None, q, None, None, True)[0]
         prediction = torch.max(factor, 1)[1].data.cpu().numpy()
         for p in prediction:
