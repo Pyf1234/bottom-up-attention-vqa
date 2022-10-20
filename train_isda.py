@@ -10,6 +10,7 @@ import utils
 from torch.autograd import Variable
 import numpy as np
 from tqdm import tqdm
+from ISDA import ISDALoss,EstimatorCV
 
 
 def compute_score_with_logits(logits, labels):
@@ -20,10 +21,13 @@ def compute_score_with_logits(logits, labels):
     return scores
 
 
-def train(model, train_loader, eval_loader, num_epochs, output, eval_each_epoch):
+def train_isda(model,fc, train_loader, eval_loader, num_epochs, output, eval_each_epoch,lambda_0):
     utils.create_dir(output)
-    optim = torch.optim.Adamax(model.parameters())
+    optim = torch.optim.Adamax([{'params': model.parameters()},{'params': fc.parameters()}])
     logger = utils.Logger(os.path.join(output, 'log.txt'))
+    #need to rewrite the isda_loss
+    isda_criterion=ISDALoss(int(model.feature_num),int(model.class_num)).cuda()
+    ce_criterion = nn.CrossEntropyLoss().cuda()
     all_results = []
 
     total_step = 0
@@ -33,6 +37,11 @@ def train(model, train_loader, eval_loader, num_epochs, output, eval_each_epoch)
         train_score = 0
 
         t = time.time()
+        
+        ratio =lambda_0 * (epoch / num_epochs)
+
+        model.train()
+        fc.train()
 
         for i, (v, q, a, b) in tqdm(enumerate(train_loader), ncols=100,
                                     desc="Epoch %d" % (epoch+1), total=len(train_loader)):
@@ -42,12 +51,13 @@ def train(model, train_loader, eval_loader, num_epochs, output, eval_each_epoch)
             a = Variable(a).cuda()
             b = Variable(b).cuda()
 
-            pred, loss = model(v, None, q, a, b)
+            loss, pred = isda_criterion(model, fc, v,q,a,b, ratio)
 
             if (loss != loss).any():
               raise ValueError("NaN loss")
             loss.backward()
             nn.utils.clip_grad_norm(model.parameters(), 0.25)
+            nn.utils.clip_grad_norm(fc.parameters(), 0.25)
             optim.step()
             optim.zero_grad()
 
@@ -62,7 +72,8 @@ def train(model, train_loader, eval_loader, num_epochs, output, eval_each_epoch)
 
         if run_eval:
             model.train(False)
-            results = evaluate(model, eval_loader)
+            fc.train(False)
+            results = evaluate(model,fc, eval_loader)
             results["epoch"] = epoch+1
             results["step"] = total_step
             results["train_loss"] = total_loss
@@ -72,8 +83,6 @@ def train(model, train_loader, eval_loader, num_epochs, output, eval_each_epoch)
 
             with open(join(output, "results.json"), "w") as f:
                 json.dump(all_results, f, indent=2)
-
-            model.train(True)
 
             eval_score = results["score"]
             bound = results["upper_bound"]
@@ -86,9 +95,12 @@ def train(model, train_loader, eval_loader, num_epochs, output, eval_each_epoch)
 
     model_path = os.path.join(output, 'model.pth')
     torch.save(model.state_dict(), model_path)
+    fc_path = os.path.join(output, 'fc.pth')
+    torch.save(fc.state_dict(), fc_path)
 
 
-def evaluate(model, dataloader):
+
+def evaluate(model,fc, dataloader):
     score = 0
     upper_bound = 0
     num_data = 0
@@ -99,7 +111,8 @@ def evaluate(model, dataloader):
         with torch.no_grad():
             v = Variable(v).cuda()
             q = Variable(q).cuda()
-        pred, _ = model(v, None, q, None, None)
+        feature = model(v, None, q, None, None)
+        pred=fc(feature)
         all_logits.append(pred.data.cpu().numpy())
 
         batch_score = compute_score_with_logits(pred, a.cuda()).sum()

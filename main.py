@@ -12,6 +12,7 @@ import numpy as np
 from dataset import Dictionary, VQAFeatureDataset
 import base_model
 from train import train
+from train_isda import train_isda
 import utils
 
 from vqa_debias_loss_functions import *
@@ -31,18 +32,20 @@ def parse_args():
         '-p', "--entropy_penalty", default=0.36, type=float,
         help="Entropy regularizer weight for the learned_mixin model")
     parser.add_argument(
-        '--mode', default="learned_mixin",
-        choices=["learned_mixin", "reweight", "bias_product", "none"],
+        '--mode', default="ISDA",
+        choices=["learned_mixin", "reweight", "bias_product", "none","ISDA"],
         help="Kind of ensemble loss to use")
     parser.add_argument(
         '--eval_each_epoch', action="store_true",
         help="Evaluate every epoch, instead of at the end")
+    parser.add_argument('--lambda_0', default=0.5, type=float,
+                    help='hyper-patameter_\lambda for ISDA')
 
     # Arguments from the original model, we leave this default, except we
     # set --epochs to 15 since the model maxes out its performance on VQA 2.0 well before then
     parser.add_argument('--epochs', type=int, default=15)
     parser.add_argument('--num_hid', type=int, default=1024)
-    parser.add_argument('--model', type=str, default='baseline0_newatt')
+    parser.add_argument('--model', type=str, default='baseline0_isda')
     parser.add_argument('--output', type=str, default='saved_models/exp0')
     parser.add_argument('--batch_size', type=int, default=512)
     parser.add_argument('--seed', type=int, default=1111, help='random seed')
@@ -98,6 +101,9 @@ def main():
     constructor = 'build_%s' % args.model
     model = getattr(base_model, constructor)(train_dset, args.num_hid).cuda()
     model.w_emb.init_embedding('data/glove6b_init_300d.npy')
+    if args.mode=='ISDA':
+        fc = base_model.Full_layer(int(model.feature_num), int(model.class_num)).cuda()
+
 
     # Add the loss_fn based our arguments
     if args.mode == "bias_product":
@@ -108,16 +114,20 @@ def main():
         model.debias_loss_fn = ReweightByInvBias()
     elif args.mode == "learned_mixin":
         model.debias_loss_fn = LearnedMixin(args.entropy_penalty)
+    elif args.mode == "ISDA":
+        print("we use the augmented loss function here")
     else:
         raise RuntimeError(args.mode)
 
     # Record the bias function we are using
-    utils.create_dir(args.output)
-    with open(args.output + "/debias_objective.json", "w") as f:
-        js = model.debias_loss_fn.to_json()
-        json.dump(js, f, indent=2)
+    if args.mode !="ISDA":
+        utils.create_dir(args.output)
+        with open(args.output + "/debias_objective.json", "w") as f:
+            js = model.debias_loss_fn.to_json()
+            json.dump(js, f, indent=2)
 
-    model = model.cuda()
+    model=model.cuda()
+    fc=fc.cuda()
     batch_size = args.batch_size
 
     torch.manual_seed(args.seed)
@@ -129,8 +139,10 @@ def main():
     eval_loader = DataLoader(eval_dset, batch_size, shuffle=False, num_workers=0)
 
     print("Starting training...")
-    train(model, train_loader, eval_loader, args.epochs, args.output, args.eval_each_epoch)
-
+    if args.mode =="ISDA":
+        train_isda(model,fc,train_loader, eval_loader, args.epochs, args.output, args.eval_each_epoch,args.lambda_0)
+    else:
+        train(model, train_loader, eval_loader, args.epochs, args.output, args.eval_each_epoch)
 
 if __name__ == '__main__':
     main()
