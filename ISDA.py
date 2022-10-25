@@ -84,7 +84,7 @@ class ISDALoss(nn.Module):
 
         y = fc(features)
 
-        self.estimator.update_CV(features.detach(), a.detach())
+        self.estimator.update_CV(features.detach(), a)
 
         isda_aug_y = self.isda_aug(fc, features, y, a, self.estimator.CoVariance.detach(), ratio)
 
