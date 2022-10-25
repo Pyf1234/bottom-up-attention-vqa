@@ -6,67 +6,49 @@ from vqa_debias_loss_functions import Plain
 class EstimatorCV():
     def __init__(self, feature_num, class_num):
         self.class_num = class_num
-        self.CoVariance = torch.zeros(class_num, feature_num, feature_num).cuda()
+        self.CoVariance = torch.zeros(class_num, feature_num).cuda()
         self.Ave = torch.zeros(class_num, feature_num).cuda()
-        self.Amount = torch.zeros(class_num).cuda()
+        self.Amount = torch.zeros(class_num).view(class_num,1).cuda()
 
     def update_CV(self, features, labels):
         N = features.size(0)
         C = self.class_num
         A = features.size(1)
 
-        NxCxFeatures = features.view(
-            N, 1, A
-        ).expand(
-            N, C, A
-        )
-        onehot=labels
+        onehot_NxC = labels
+        print(onehot_NxC.shape)
 
-        NxCxA_onehot = onehot.view(N, C, 1).expand(N, C, A)
+        expe_temp_CxA=torch.transpose(onehot_NxC,0,1).mul(features)
+        print(expe_temp_CxA.shape)
 
-        features_by_sort = NxCxFeatures.mul(NxCxA_onehot)
+        batch_class_num_Cx1=onehot_NxC.sum(0).view(C,1)
+        batch_class_num_Cx1[batch_class_num_Cx1==0]=1
+        print(batch_class_num_Cx1.shape)
 
-        Amount_CxA = NxCxA_onehot.sum(0)
-        Amount_CxA[Amount_CxA == 0] = 1
+        expe_CxA=expe_temp_CxA.div(batch_class_num_Cx1)
+        print(expe_CxA.shape)
 
-        ave_CxA = features_by_sort.sum(0) / Amount_CxA
+        pow2_expe_temp_CxA=torch.transpose(onehot_NxC,0,1).mul(features.pow(2))
+        pow2_expe_CxA=pow2_expe_temp_CxA.div(batch_class_num_Cx1)
+        print(pow2_expe_CxA.shape)
 
-        var_temp = features_by_sort - \
-                   ave_CxA.expand(N, C, A).mul(NxCxA_onehot)
+        batch_var_CxA=pow2_expe_CxA-expe_CxA.pow(2)
+        print(batch_var_CxA.shape)
 
-        var_temp = torch.bmm(
-            var_temp.permute(1, 2, 0),
-            var_temp.permute(1, 0, 2)
-        ).div(Amount_CxA.view(C, A, 1).expand(C, A, A))
+        batch_weight_Cx1=batch_class_num_Cx1.div(batch_class_num_Cx1+self.Amount)
+        batch_weight_Cx1[batch_weight_Cx1!=batch_weight_Cx1]=0
+        print(batch_weight_Cx1.shape)
 
-        sum_weight_CV = onehot.sum(0).view(C, 1, 1).expand(C, A, A)
 
-        sum_weight_AV = onehot.sum(0).view(C, 1).expand(C, A)
+        addition_var_CxA=batch_weight_Cx1.mul(1 - batch_weight_Cx1).mul((self.Ave - expe_CxA).pow(2))
+        print(addition_var_CxA.shape)
 
-        weight_CV = sum_weight_CV.div(
-            sum_weight_CV + self.Amount.view(C, 1, 1).expand(C, A, A)
-        )
-        weight_CV[weight_CV != weight_CV] = 0
+        self.CoVariance = (self.CoVariance.mul(1 - batch_weight_Cx1) + batch_var_CxA
+                           .mul(batch_weight_Cx1)).detach() + addition_var_CxA.detach()
 
-        weight_AV = sum_weight_AV.div(
-            sum_weight_AV + self.Amount.view(C, 1).expand(C, A)
-        )
-        weight_AV[weight_AV != weight_AV] = 0
+        self.Ave = (self.Ave.mul(1 - batch_weight_Cx1) + expe_CxA.mul(batch_weight_Cx1)).detach()
 
-        additional_CV = weight_CV.mul(1 - weight_CV).mul(
-            torch.bmm(
-                (self.Ave - ave_CxA).view(C, A, 1),
-                (self.Ave - ave_CxA).view(C, 1, A)
-            )
-        )
-
-        self.CoVariance = (self.CoVariance.mul(1 - weight_CV) + var_temp
-                      .mul(weight_CV)).detach() + additional_CV.detach()
-
-        self.Ave = (self.Ave.mul(1 - weight_AV) + ave_CxA.mul(weight_AV)).detach()
-
-        self.Amount += onehot.sum(0)
-
+        self.Amount+=batch_class_num_Cx1
 
 class ISDALoss(nn.Module):
     def __init__(self, feature_num, class_num):
@@ -84,17 +66,13 @@ class ISDALoss(nn.Module):
         C = self.class_num
         A = features.size(1)
 
-        #little bug
         labels=torch.argmax(one_hot,-1).view(1,-1)
 
         weight_m = list(fc.parameters())[2]
 
         CV_temp = cv_matrix[labels].squeeze()
 
-        #little bug
-        a=torch.matmul(weight_m,CV_temp)
-        b=torch.matmul(a,weight_m.T)
-        aug=torch.diagonal(b,dim1=-2,dim2=-1)
+        aug=torch.matmul(CV_temp,torch.transpose(torch.pow(weight_m,2),0,1))
 
         aug_result = y-(one_hot-0.5) * aug*ratio
 
@@ -106,10 +84,10 @@ class ISDALoss(nn.Module):
 
         y = fc(features)
 
-        self.estimator.update_CV(features.detach(), a)
+        self.estimator.update_CV(features.detach(), a.detach())
 
         isda_aug_y = self.isda_aug(fc, features, y, a, self.estimator.CoVariance.detach(), ratio)
 
-        loss = self.BCE_with_logits(isda_aug_y, a)
+        loss = F.binary_cross_entropy_with_logits(isda_aug_y, a)*a.size(1)
 
         return loss, y
