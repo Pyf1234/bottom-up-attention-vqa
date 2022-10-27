@@ -1,0 +1,6 @@
+#for running main.py:
+python main.py --output ./output --nocp --eval_each_epoch
+
+
+#for running save_predictions.py
+python save_predictions.py ./output ./output
