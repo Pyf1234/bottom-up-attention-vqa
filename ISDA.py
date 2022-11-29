@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.nn import functional as F
 from vqa_debias_loss_functions import Plain
 
 
@@ -16,32 +17,32 @@ class EstimatorCV():
         A = features.size(1)
 
         onehot_NxC = labels
-        print(onehot_NxC.shape)
+       
 
-        expe_temp_CxA=torch.transpose(onehot_NxC,0,1).mul(features)
-        print(expe_temp_CxA.shape)
+        expe_temp_CxA=torch.matmul(onehot_NxC.permute(1,0), features)
+        
 
         batch_class_num_Cx1=onehot_NxC.sum(0).view(C,1)
         batch_class_num_Cx1[batch_class_num_Cx1==0]=1
-        print(batch_class_num_Cx1.shape)
+        
 
         expe_CxA=expe_temp_CxA.div(batch_class_num_Cx1)
-        print(expe_CxA.shape)
+       
 
-        pow2_expe_temp_CxA=torch.transpose(onehot_NxC,0,1).mul(features.pow(2))
+        pow2_expe_temp_CxA=torch.matmul(torch.transpose(onehot_NxC,0,1),(features.pow(2)))
         pow2_expe_CxA=pow2_expe_temp_CxA.div(batch_class_num_Cx1)
-        print(pow2_expe_CxA.shape)
+       
 
         batch_var_CxA=pow2_expe_CxA-expe_CxA.pow(2)
-        print(batch_var_CxA.shape)
+    
 
         batch_weight_Cx1=batch_class_num_Cx1.div(batch_class_num_Cx1+self.Amount)
         batch_weight_Cx1[batch_weight_Cx1!=batch_weight_Cx1]=0
-        print(batch_weight_Cx1.shape)
+       
 
 
-        addition_var_CxA=batch_weight_Cx1.mul(1 - batch_weight_Cx1).mul((self.Ave - expe_CxA).pow(2))
-        print(addition_var_CxA.shape)
+        addition_var_CxA=torch.matmul(torch.matmul((batch_weight_Cx1),torch.transpose((1 - batch_weight_Cx1),0,1)),((self.Ave - expe_CxA).pow(2)))
+       
 
         self.CoVariance = (self.CoVariance.mul(1 - batch_weight_Cx1) + batch_var_CxA
                            .mul(batch_weight_Cx1)).detach() + addition_var_CxA.detach()
@@ -49,6 +50,7 @@ class EstimatorCV():
         self.Ave = (self.Ave.mul(1 - batch_weight_Cx1) + expe_CxA.mul(batch_weight_Cx1)).detach()
 
         self.Amount+=batch_class_num_Cx1
+
 
 class ISDALoss(nn.Module):
     def __init__(self, feature_num, class_num):
@@ -84,7 +86,7 @@ class ISDALoss(nn.Module):
 
         y = fc(features)
 
-        self.estimator.update_CV(features.detach(), a)
+        self.estimator.update_CV(features.detach(), a.detach())
 
         isda_aug_y = self.isda_aug(fc, features, y, a, self.estimator.CoVariance.detach(), ratio)
 

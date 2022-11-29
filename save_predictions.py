@@ -7,7 +7,7 @@ import torch
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
+from collections import OrderedDict
 import base_model
 from dataset import VQAFeatureDataset, Dictionary
 
@@ -22,16 +22,18 @@ def main():
 
     print("Loading data...")
     dictionary = Dictionary.load_from_file('data/dictionary.pkl')
-    train_dset = VQAFeatureDataset('train', dictionary, cp=True)
-    eval_dset = VQAFeatureDataset('val', dictionary, cp=True)
+    train_dset = VQAFeatureDataset('train', dictionary, cp=False)
+    eval_dset = VQAFeatureDataset('val', dictionary, cp=False)
 
     eval_loader = DataLoader(eval_dset, 256, shuffle=False, num_workers=0)
 
-    constructor = 'build_%s' % 'baseline0_newatt'
+    constructor = 'build_%s' % 'baseline0_isda'
     model = getattr(base_model, constructor)(train_dset, 1024).cuda()
-
+    fc = base_model.Full_layer(int(model.feature_num), int(model.class_num)).cuda()
     print("Loading state dict for %s..." % path)
 
+    state_dict_model = torch.load(join(path, "model.pth"))
+    state_dict_fc=torch.load(join(path,"fc.pth"))
     state_dict = torch.load(join(path, "model.pth"))
     if all(k.startswith("module.") for k in state_dict):
         filtered = {}
@@ -42,11 +44,13 @@ def main():
     for k in list(state_dict):
         if k.startswith("debias_loss_fn"):
             del state_dict[k]
-
-    model.load_state_dict(state_dict)
-
+    model.load_state_dict(state_dict_model)
+    fc.load_state_dict(state_dict_fc)
     model.cuda()
     model.eval()
+    fc.cuda()
+    fc.eval()
+    
     print("Done")
 
     predictions = []
@@ -54,8 +58,11 @@ def main():
         with torch.no_grad():
             v = Variable(v).cuda()
             q = Variable(q).cuda()
-        factor = model(v, None, q, None, None, True)[0]
-        prediction = torch.max(factor, 1)[1].data.cpu().numpy()
+        factor = model(v, None, q, None, None, True)
+        print(factor.shape)
+        pred=fc(factor)
+        print(pred.shape)
+        prediction = torch.max(pred, 1)[1].data.cpu().numpy()
         for p in prediction:
             predictions.append(train_dset.label2ans[p])
 
